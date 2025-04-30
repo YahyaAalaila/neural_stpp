@@ -1,18 +1,16 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
-
 import numpy as np
 from setuptools import setup, find_packages
 from Cython.Build import cythonize
 
 setup(
-    name="neural-stpp",               # ← must match #egg=neural-stpp
-    version="0.1.0",                  # ← pick a version
+    name="neural-stpp",
+    version="0.1.0",
     description="Neural STPP implementation from facebookresearch",
-    packages=find_packages(where="."),         # ← auto-discovers the neural_stpp package
+    # ─── THIS is the magic ──────────────────────────────────────────────
+    package_dir={"": "neural_stpp"},       # install all code under neural_stpp/ as top-level
+    packages=find_packages(where="neural_stpp"),
     ext_modules=cythonize("neural_stpp/data_utils_fast.pyx"),
     include_dirs=[np.get_include()],
-    install_requires=[
-        "numpy>=1.18",                # ensure runtime NumPy
-    ],
+    install_requires=["numpy>=1.18"],
     python_requires=">=3.7",
 )
