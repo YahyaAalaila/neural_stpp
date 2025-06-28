@@ -7,8 +7,7 @@ setup(
     version="0.1.0",
     description="Neural STPP implementation from facebookresearch",
     # ─── THIS is the magic ──────────────────────────────────────────────
-    package_dir={"": "neural_stpp"},       # install all code under neural_stpp/ as top-level
-    packages=find_packages(where="neural_stpp"),
+    packages=find_packages(),  
     ext_modules=cythonize("neural_stpp/data_utils_fast.pyx"),
     include_dirs=[np.get_include()],
     install_requires=["numpy>=1.18"],
