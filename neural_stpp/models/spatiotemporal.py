@@ -3,8 +3,8 @@
 from abc import ABCMeta, abstractmethod
 import torch
 import torch.nn as nn
-from models.spatial import JumpCNF, SelfAttentiveCNF, ConditionalGMM
-from models.temporal import NeuralPointProcess
+from .spatial import JumpCNF, SelfAttentiveCNF, ConditionalGMM
+from .temporal import NeuralPointProcess
 
 
 class SpatiotemporalModel(nn.Module, metaclass=ABCMeta):
