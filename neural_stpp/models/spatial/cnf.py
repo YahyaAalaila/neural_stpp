@@ -3,7 +3,7 @@
 import torch
 import torch.nn as nn
 from torchdiffeq import odeint_adjoint
-import diffeq_layers
+from neural_stpp import diffeq_layers
 
 
 def divergence_bf(f, y, training, **unused_kwargs):
