@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchdiffeq import odeint_adjoint as odeint
 
-import diffeq_layers
+from neural_stpp import diffeq_layers
 from .basic import TemporalPointProcess
 
 
