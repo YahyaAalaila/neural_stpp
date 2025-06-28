@@ -4,7 +4,7 @@ import math
 import torch
 import torch.nn as nn
 
-import flow_layers
+from neural_stpp import flow_layers
 from .cnf import TimeVariableCNF, build_fc_odefunc, max_rms_norm
 
 
