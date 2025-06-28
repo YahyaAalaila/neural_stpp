@@ -68,6 +68,9 @@ class TimeVariableCNF(nn.Module):
             rtol=tol,
             atol=tol,
             method=method,
+            options={                   # <-- force the solver to float32
+                "dtype": torch.float32
+            }
         )
 
         if intermediate_states > 1:
