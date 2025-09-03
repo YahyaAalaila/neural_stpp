@@ -107,8 +107,17 @@ def get_dim(data):
     else:
         return 2
 
-
-def validate(model, test_loader, t0, t1, device):
+def build_time_covariates(event_times, zdim, device, kind="zeros"):
+    if zdim <= 0:
+        return None
+    N, T = event_times.shape
+    if kind == "zeros":
+        return torch.zeros(N, T, zdim, device=device, dtype=event_times.dtype)
+    elif kind == "randn":
+        return 0.01 * torch.randn(N, T, zdim, device=device, dtype=event_times.dtype)
+    else:
+        raise ValueError("Unknown covariate kind")
+def validate(model, test_loader, t0, t1, device, zdim = 0):
 
     model.eval()
 
@@ -119,7 +128,8 @@ def validate(model, test_loader, t0, t1, device):
         for batch in test_loader:
             event_times, spatial_locations, input_mask = map(lambda x: cast(x, device), batch)
             num_events = input_mask.sum()
-            space_loglik, time_loglik = model(event_times, spatial_locations, input_mask, t0, t1)
+            Z = build_time_covariates(event_times, zdim, device)
+            space_loglik, time_loglik = model(event_times, spatial_locations, input_mask, t0, t1, time_covariates=Z)
             space_loglik = space_loglik.sum() / num_events
             time_loglik = time_loglik.sum() / num_events
 
@@ -205,6 +215,7 @@ def _main(rank, world_size, args, savepath, logger):
 
     if args.model == "jumpcnf" and args.tpp == "neural":
         model = JumpCNFSpatiotemporalModel(dim=x_dim,
+                                           zdim=args.zdim,
                                            hidden_dims=list(map(int, args.hdims.split("-"))),
                                            tpp_hidden_dims=list(map(int, args.tpp_hdims.split("-"))),
                                            actfn=args.actfn,
@@ -257,7 +268,7 @@ def _main(rank, world_size, args, savepath, logger):
             tpp_model = SelfCorrectingPointProcess()
         elif args.tpp == "neural":
             tpp_hidden_dims = list(map(int, args.tpp_hdims.split("-")))
-            tpp_model = NeuralPointProcess(
+            tpp_model = NeuralPointProcess(zdim=args.zdim, proj_k=args.proj_k,
                 cond_dim=x_dim, hidden_dims=tpp_hidden_dims, cond=args.tpp_cond, style=args.tpp_style, actfn=args.tpp_actfn,
                 otreg_strength=args.tpp_otreg_strength, tol=args.tol)
         else:
@@ -351,8 +362,9 @@ def _main(rank, world_size, args, savepath, logger):
 
             if num_events == 0:
                 raise RuntimeError("Got batch with no observations.")
-
-            space_loglik, time_loglik = model(event_times, spatial_locations, input_mask, t0, t1)
+            
+            Z = build_time_covariates(event_times, args.zdim, device)
+            space_loglik, time_loglik = model(event_times, spatial_locations, input_mask, t0, t1, time_covariates=Z)
 
             space_loglik = space_loglik.sum() / num_events
             time_loglik = time_loglik.sum() / num_events
@@ -391,9 +403,13 @@ def _main(rank, world_size, args, savepath, logger):
 
                 # Average NFE across devices.
                 nfe = 0
+                # for m in model.modules():
+                #     if isinstance(m, TimeVariableCNF) or isinstance(m, TimeVariableODE):
+                #         nfe += m.nfe
                 for m in model.modules():
-                    if isinstance(m, TimeVariableCNF) or isinstance(m, TimeVariableODE):
-                        nfe += m.nfe
+                    if hasattr(m, "nfe"):
+                        nfe += int(m.nfe)
+                        
                 nfe = torch.tensor(nfe).to(device)
                 dist.all_reduce(nfe, op=dist.ReduceOp.SUM)
                 nfe = nfe // world_size
@@ -418,8 +434,8 @@ def _main(rank, world_size, args, savepath, logger):
 
             if rank == 0 and itr % args.testfreq == 0:
                 # ema.swap()
-                val_space_loglik, val_time_loglik = validate(model, val_loader, t0, t1, device)
-                test_space_loglik, test_time_loglik = validate(model, test_loader, t0, t1, device)
+                val_space_loglik, val_time_loglik = validate(model, val_loader, t0, t1, device, zdim=args.zdim)
+                test_space_loglik, test_time_loglik = validate(model, test_loader, t0, t1, device, zdim=args.zdim)
                 # ema.swap()
                 logger.info(
                     f"[Test] Iter {itr} | Val Temporal {val_time_loglik:.4f} | Val Spatial {val_space_loglik:.4f}"
@@ -483,6 +499,10 @@ if __name__ == "__main__":
     parser.add_argument("--logfreq", type=int, default=10)
     parser.add_argument("--testfreq", type=int, default=100)
     parser.add_argument("--port", type=int, default=None)
+    
+    parser.add_argument("--zdim", type=int, default=0, help="Per-event covariate dim (0 disables).")
+    parser.add_argument("--proj_k", type=int, default=16, help="Control dimension after projector (inside temporal ODE).")
+
     args = parser.parse_args()
 
     if args.port is None:
@@ -515,6 +535,8 @@ if __name__ == "__main__":
         experiment_name += f"_ot{args.tpp_otreg_strength}"
         if args.tpp_cond:
             experiment_name += "_cond"
+        if args.zdim > 0:
+            experiment_name += f"_z{args.zdim}k{args.proj_k}"
     if args.share_hidden and args.model in ["jumpcnf", "attncnf"] and args.tpp == "neural":
         experiment_name += "_sharehidden"
     if args.solve_reverse and args.model == "jumpcnf" and args.tpp == "neural":

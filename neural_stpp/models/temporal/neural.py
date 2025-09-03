@@ -10,6 +10,11 @@ from torchdiffeq import odeint_adjoint as odeint
 from neural_stpp import diffeq_layers
 from .basic import TemporalPointProcess
 
+# top of file
+from .odefunc_controlled import IntensityODEFuncControlled
+from .solver_controlled import TimeVariableODEControlled
+from .control import PiecewiseConstantControl
+from ..common.alphaearth import AlphaEarthProjector
 
 
 ACTFNS = {
@@ -201,9 +206,11 @@ class HiddenStateODEFuncList(nn.Module):
 
 class NeuralPointProcess(TemporalPointProcess):
     dynamics_dict = {"split": SplitHiddenStateODEFunc, "simple": SimpleHiddenStateODEFunc, "gru": GRUHiddenStateODEFunc}
-    def __init__(self, cond_dim=0, hidden_dims=[64, 64, 64], cond=False, style="split", actfn="softplus", hdim=None, separate=1, tol=1e-6, otreg_strength=0.1):
+    def __init__(self, zdim, proj_k, cond_dim=0, hidden_dims=[64, 64, 64], cond=False, style="split", actfn="softplus", hdim=None, separate=1, tol=1e-6, otreg_strength=0.1, time_covariates=False):
         super().__init__()
-        
+        self.zdim = zdim
+        self.projector = AlphaEarthProjector(in_dim=zdim, out_dim=proj_k) if zdim > 0 else None
+
         if not cond:
             cond_dim = 0
         self.cond = cond
@@ -224,18 +231,22 @@ class NeuralPointProcess(TemporalPointProcess):
         self.hidden_state_dynamics = HiddenStateODEFuncList(*dynamics)
 
         intensity_net = nn.Sequential(nn.Linear(self.hdim, self.hdim * 4), nn.Softplus(), nn.Linear(self.hdim * 4, 1))
-        intensity_odefunc = IntensityODEFunc(self.hdim, self.hidden_state_dynamics, intensity_net)
-        self.ode_solver = TimeVariableODE(intensity_odefunc, atol=tol, rtol=tol, method="dopri5", energy_regularization=otreg_strength)
+        #intensity_odefunc = IntensityODEFunc(self.hdim, self.hidden_state_dynamics, intensity_net)
+        intensity_odefunc = IntensityODEFuncControlled(hdim=hdim, zdim=(proj_k if zdim>0 else 0), tfeat_dim=0)
+        self.ode_solver = TimeVariableODEControlled(intensity_odefunc, atol=tol, rtol=tol, method='dopri5')
+        intensity_odefunc.head.a = intensity_net
 
-    def logprob(self, event_times, spatial_locations, input_mask, t0, t1):
-        intensities, Lambda, _ = self.integrate_lambda(event_times, spatial_locations, input_mask, t0, t1)
+        #self.ode_solver = TimeVariableODE(intensity_odefunc, atol=tol, rtol=tol, method="dopri5", energy_regularization=otreg_strength)
+
+    def logprob(self, event_times, spatial_locations, input_mask, t0, t1, time_covariates=None):
+        intensities, Lambda, _ = self.integrate_lambda(event_times, spatial_locations, input_mask, t0, t1, time_covariates=None)
         log_intensities = torch.log(intensities + 1e-8)
         log_intensities = torch.where(input_mask.bool(), log_intensities, torch.zeros_like(log_intensities))
         return torch.sum(log_intensities, dim=1) - Lambda
     def get_intensity(self, state):
         return self.ode_solver.func.get_intensity(state)
 
-    def integrate_lambda(self, event_times, spatial_location, input_mask, t0, t1, nlinspace=1):
+    def integrate_lambda(self, event_times, spatial_location, input_mask, t0, t1, nlinspace=1, time_covariates=False):
         if not self.cond:
             spatial_location = None
         target_dtype = next(self.ode_solver.func.intensity_fn.parameters()).dtype
@@ -245,6 +256,13 @@ class NeuralPointProcess(TemporalPointProcess):
             spatial_location = spatial_location.to(dtype=target_dtype, device=device)
             
                 # build float32 t0 / t1
+        Z = None
+        Zk = None
+        if time_covariates is not None:
+            Z = time_covariates.to(dtype=target_dtype, device=device)   
+            if getattr(self, "projector", None) is not None:  
+                Zk = self.projector(Z)   
+        
         if not torch.is_tensor(t0):
             t0 = torch.tensor(t0, dtype=torch.float32, device=device)
         else:
@@ -274,6 +292,11 @@ class NeuralPointProcess(TemporalPointProcess):
 
             # Set t1 = t0 if the input is masked out at time t1.
             t1_i = torch.where(input_mask[:, i], event_times[:, i], t0)
+            
+            if Zk is not None and hasattr(self.ode_solver.func, "set_control"):
+                self.ode_solver.func.set_control(Zk[:, i])
+            
+            
             state_traj = self.ode_solver.integrate(t0, t1_i, state, nlinspace=nlinspace, method="dopri5" if self.training else "dopri5")
 
             hiddens = state_traj[1]  # (1 + nlinspace, N, D)
@@ -288,10 +311,22 @@ class NeuralPointProcess(TemporalPointProcess):
             intensities.append(self.get_intensity(tpp_state).reshape(-1))
 
             if i < T - 1 or t1 is not None:
-                cond = spatial_location[:, i] if spatial_location is not None else None
+                cond = None 
+                if spatial_location is not None or Z is not None:
+                    parts = []
+                    if spatial_location is not None:
+                        parts.append(spatial_location[:, i])
+                    if Z is not None:
+                        parts.append(Z[:, i])
+                    cond = torch.cat(parts, dim=-1)
                 updated_tpp_state = self.hidden_state_dynamics.update_state(event_times[:, i], tpp_state, cond=cond)
                 tpp_state = torch.where(input_mask[:, i].reshape(-1, 1).expand_as(tpp_state), updated_tpp_state, tpp_state)
                 state = (Lambda, tpp_state)
+
+                # cond = spatial_location[:, i] if spatial_location is not None else None
+                # updated_tpp_state = self.hidden_state_dynamics.update_state(event_times[:, i], tpp_state, cond=cond)
+                # tpp_state = torch.where(input_mask[:, i].reshape(-1, 1).expand_as(tpp_state), updated_tpp_state, tpp_state)
+                # state = (Lambda, tpp_state)
 
             # Track t0 as the last valid event time.
             t0 = torch.where(input_mask[:, i], event_times[:, i], t0)
@@ -300,8 +335,13 @@ class NeuralPointProcess(TemporalPointProcess):
             # Integrate from last time sample to t1.
             t1 = t1 if torch.is_tensor(t1) else torch.tensor(t1)
             t1 = t1.expand(N).to(event_times)
-            state_traj = self.ode_solver.integrate(t0, t1, state, nlinspace=nlinspace, method="dopri5" if self.training else "dopri5")
-
+            if Zk is not None and hasattr(self.ode_solver.func, "set_control"):
+                self.ode_solver.func.set_control(Zk[:, min(T - 1, Zk.shape[1] - 1)])
+            #state_traj = self.ode_solver.integrate(t0, t1, state, nlinspace=nlinspace, method="dopri5" if self.training else "dopri5")
+            state_traj = self.ode_solver.integrate(
+                t0, t1, state, nlinspace=nlinspace, method="dopri5" if self.training else "dopri5"
+            )
+            
             hiddens = state_traj[1][1:]
             prejump_hidden_states.append(hiddens)
 

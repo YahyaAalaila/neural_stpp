@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: neural-stpp
+Version: 0.1.0
+Summary: Neural STPP implementation from facebookresearch
+Requires-Python: >=3.7
+License-File: LICENSE
+Requires-Dist: numpy>=1.18
+Dynamic: license-file
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

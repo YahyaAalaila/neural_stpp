@@ -51,11 +51,11 @@ class CombinedSpatiotemporalModel(SpatiotemporalModel):
 class SharedHiddenStateSpatiotemporalModel(SpatiotemporalModel, metaclass=ABCMeta):
 
     def __init__(self, dim=2, hidden_dims=[64, 64, 64], tpp_hidden_dims=[8, 20], tpp_cond=False, tpp_style="split",
-                 actfn="softplus", tpp_actfn="softplus", zero_init=True, share_hidden=False, solve_reverse=False, tpp_otreg_strength=0.0, tol=1e-6, **kwargs):
+                 actfn="softplus", tpp_actfn="softplus", zero_init=True, share_hidden=False, solve_reverse=False, tpp_otreg_strength=0.0, tol=1e-6, zdim=0, **kwargs):
         super().__init__()
         tpp_hidden_dims = [h for h in tpp_hidden_dims]
-        self.temporal_model = NeuralPointProcess(
-            cond_dim=dim, hidden_dims=tpp_hidden_dims, cond=tpp_cond, style=tpp_style, actfn=tpp_actfn, hdim=tpp_hidden_dims[0] // 2,
+        self.temporal_model = NeuralPointProcess(zdim=zdim, proj_k=16,
+            cond_dim=(dim + zdim), hidden_dims=tpp_hidden_dims, cond=tpp_cond, style=tpp_style, actfn=tpp_actfn, hdim=tpp_hidden_dims[0] // 2,
             separate=2 if not share_hidden else 1, tol=tol, otreg_strength=tpp_otreg_strength)
         self._build_spatial_model(dim, hidden_dims, actfn, zero_init, aux_dim=tpp_hidden_dims[0] // 2,
                                   aux_odefunc=self.temporal_model.hidden_state_dynamics if solve_reverse else zero_diffeq,
@@ -65,11 +65,11 @@ class SharedHiddenStateSpatiotemporalModel(SpatiotemporalModel, metaclass=ABCMet
     def _build_spatial_model(self, dim, hidden_dims, actfn, zero_init, aux_dim, aux_odefunc, **kwargs):
         pass
 
-    def forward(self, event_times, spatial_locations, input_mask, t0, t1):
+    def forward(self, event_times, spatial_locations, input_mask, t0, t1, time_covariates=None):
         intensities, Lambda, hidden_states = self.temporal_model.integrate_lambda(event_times, spatial_locations, input_mask, t0, t1)
         time_loglik = torch.sum(torch.log(intensities + 1e-8) * input_mask, dim=1) - Lambda
         hidden_states = hidden_states[:, 1:-1]  # Remove first (t=t0) and last (t=t1) hidden states.
-        space_loglik = self.spatial_model.logprob(event_times, spatial_locations, input_mask, aux_state=hidden_states)
+        space_loglik = self.spatial_model.logprob(event_times, spatial_locations, input_mask, aux_state=hidden_states, time_covariates=time_covariates)
         return space_loglik, time_loglik
 
     def spatial_conditional_logprob_fn(self, t, event_times, spatial_locations, t0, t1):

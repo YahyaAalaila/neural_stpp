@@ -5,7 +5,7 @@ import contextlib
 import numpy as np
 
 from datasets import SpatioTemporalDataset
-from neural_stpp.neural_stpp.MHP import MHP
+from neural_stpp.MHP import MHP
 
 END_TIME = 30.0
 

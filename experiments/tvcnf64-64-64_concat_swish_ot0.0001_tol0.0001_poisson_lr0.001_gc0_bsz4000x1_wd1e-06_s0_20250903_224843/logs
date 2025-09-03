@@ -1,0 +1,49 @@
+2025-09-03 22:48:44,925 - Traceback (most recent call last):
+  File "/Users/aalaila/Documents/DFKI/DSA/Projecta/Eventfull/WP2.1.3/Neural_stpp_cov/neural_stpp/neural_stpp/train_stpp.py", line 559, in <module>
+    mp.spawn(main,
+    ~~~~~~~~^^^^^^
+             args=(args.ngpus, args, savepath),
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+             nprocs=args.ngpus,
+             ^^^^^^^^^^^^^^^^^^
+             join=True)
+             ^^^^^^^^^^
+  File "/Users/aalaila/Documents/DFKI/DSA/Projecta/Eventfull/WP2.1.3/Neural_stpp_cov/neural_stpp/.venv/lib/python3.13/site-packages/torch/multiprocessing/spawn.py", line 340, in spawn
+    return start_processes(fn, args, nprocs, join, daemon, start_method="spawn")
+  File "/Users/aalaila/Documents/DFKI/DSA/Projecta/Eventfull/WP2.1.3/Neural_stpp_cov/neural_stpp/.venv/lib/python3.13/site-packages/torch/multiprocessing/spawn.py", line 296, in start_processes
+    while not context.join():
+              ~~~~~~~~~~~~^^
+  File "/Users/aalaila/Documents/DFKI/DSA/Projecta/Eventfull/WP2.1.3/Neural_stpp_cov/neural_stpp/.venv/lib/python3.13/site-packages/torch/multiprocessing/spawn.py", line 215, in join
+    raise ProcessRaisedException(msg, error_index, failed_process.pid)
+torch.multiprocessing.spawn.ProcessRaisedException: 
+
+-- Process 0 terminated with the following error:
+Traceback (most recent call last):
+  File "/Users/aalaila/Documents/DFKI/DSA/Projecta/Eventfull/WP2.1.3/Neural_stpp_cov/neural_stpp/.venv/lib/python3.13/site-packages/torch/multiprocessing/spawn.py", line 90, in _wrap
+    fn(i, *args)
+    ~~^^^^^^^^^^
+  File "/Users/aalaila/Documents/DFKI/DSA/Projecta/Eventfull/WP2.1.3/Neural_stpp_cov/neural_stpp/neural_stpp/train_stpp.py", line 145, in main
+    setup(rank, world_size, args.port)
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/aalaila/Documents/DFKI/DSA/Projecta/Eventfull/WP2.1.3/Neural_stpp_cov/neural_stpp/neural_stpp/train_stpp.py", line 40, in setup
+    dist.init_process_group("nccl", rank=rank, world_size=world_size, timeout=datetime.timedelta(minutes=30))
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/aalaila/Documents/DFKI/DSA/Projecta/Eventfull/WP2.1.3/Neural_stpp_cov/neural_stpp/.venv/lib/python3.13/site-packages/torch/distributed/c10d_logger.py", line 81, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/aalaila/Documents/DFKI/DSA/Projecta/Eventfull/WP2.1.3/Neural_stpp_cov/neural_stpp/.venv/lib/python3.13/site-packages/torch/distributed/c10d_logger.py", line 95, in wrapper
+    func_return = func(*args, **kwargs)
+  File "/Users/aalaila/Documents/DFKI/DSA/Projecta/Eventfull/WP2.1.3/Neural_stpp_cov/neural_stpp/.venv/lib/python3.13/site-packages/torch/distributed/distributed_c10d.py", line 1764, in init_process_group
+    default_pg, _ = _new_process_group_helper(
+                    ~~~~~~~~~~~~~~~~~~~~~~~~~^
+        world_size,
+        ^^^^^^^^^^^
+    ...<8 lines>...
+        group_desc="default_pg",
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/aalaila/Documents/DFKI/DSA/Projecta/Eventfull/WP2.1.3/Neural_stpp_cov/neural_stpp/.venv/lib/python3.13/site-packages/torch/distributed/distributed_c10d.py", line 1999, in _new_process_group_helper
+    raise RuntimeError("Distributed package doesn't have NCCL built in")
+RuntimeError: Distributed package doesn't have NCCL built in
+
+
