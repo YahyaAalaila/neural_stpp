@@ -30,10 +30,13 @@ class JumpCNF(nn.Module):
 
     time_offset = 2.0
 
-    def __init__(self, dim=2, hidden_dims=[64, 64, 64], aux_dim=0, aux_odefunc=None, layer_type="concat", actfn="softplus", zero_init=True, tol=1e-4, otreg_strength=0.0):
+    def __init__(self, dim=2, hidden_dims=[64, 64, 64], aux_dim=0, aux_odefunc=None, layer_type="concat", actfn="softplus", zero_init=True, tol=1e-4, otreg_strength=0.0, num_marks=2, mark_embed_dim = 8):
         super().__init__()
-
         self.aux_dim = aux_dim
+        self.dim = dim
+        self.mark_embed_dim = mark_embed_dim
+            
+            
         func = build_fc_odefunc(dim + self.aux_dim, hidden_dims, out_dim=dim, nonzero_dim=dim, layer_type=layer_type, actfn=actfn, zero_init=zero_init)
 
         if self.aux_dim > 0:
@@ -45,16 +48,18 @@ class JumpCNF(nn.Module):
         assert isinstance(odefunc, nn.Module)
 
         self.cnf = TimeVariableCNF(odefunc, dim, tol=tol, method="dopri5", energy_regularization=otreg_strength, jacnorm_regularization=otreg_strength)
-
-        self.inst_flow = flow_layers.HypernetworkRadialFlow(dim, cond_dim=1 + dim + aux_dim, nflows=4)
-
+        
+        cond_dim = 1 + dim + aux_dim #+ (mark_embed_dim if self.mark_embedding is not None else 0)
+        self.inst_flow = flow_layers.HypernetworkRadialFlow(dim, cond_dim=cond_dim, nflows=4)
         self.z_mean = nn.Parameter(torch.zeros(1, dim))
         self.z_logstd = nn.Parameter(torch.zeros(1, dim))
+        
+        
 
     def logprob(self, event_times, spatial_locations, input_mask=None, aux_state=None):
         return self._cond_logliks(event_times, spatial_locations, input_mask, aux_state)
 
-    def _cond_logliks(self, event_times, spatial_locations, input_mask=None, aux_state=None):
+    def _cond_logliks(self, event_times, spatial_locations, input_mask=None, aux_state=None, marks=None):
         """
         Args:
             event_times: (N, T)
@@ -75,6 +80,7 @@ class JumpCNF(nn.Module):
             assert event_times.shape[:2] == aux_state.shape[:2]
 
         N, T, D = spatial_locations.shape
+        #print(f"[DEBUG -- JumpCNF] N: {N}, T: {T}, D: {D}, aux_dim: {self.aux_dim}")
         self.cnf.nfe = 0
 
         input_mask = input_mask.bool()
@@ -125,7 +131,10 @@ class JumpCNF(nn.Module):
             if i < T - 1:
                 obs_x = spatial_locations[:, -i - 2].reshape(N, 1, D).expand(N, i + 1, D).reshape(-1, D)
                 obs_t = event_times[:, -i - 2].reshape(N, 1).expand(N, i + 1).reshape(-1, 1)
-                cond = torch.cat([obs_t, obs_x, auxs[:, -self.aux_dim:]], dim=1)  # (N * (i + 1), 1 + D + D_a)
+                auxs  = auxs[:, -self.aux_dim:] if self.aux_dim > 0 else torch.empty(0, device=obs_x.device)
+                cond_pieces = [obs_t, obs_x, auxs]
+                
+                cond = torch.cat(cond_pieces, dim=1)  # (N * (i + 1), 1 + D + D_a + D_mark)
                 xs, dlogps = self.inst_flow(xs, logpx=dlogps, cond=cond)
 
             xs = xs.reshape(N, i + 1, D)
@@ -192,6 +201,88 @@ class JumpCNF(nn.Module):
             return dx
 
         return vecfield_fn
+    
+    def sample(self, last_x, last_t, tau, mark, aux=None, base=None):
+        """
+        Sample next location x_{next} ∈ ℝ^D conditioned exactly like training:
+        cond = [t_next, x_last, aux_last?, mark_emb?]
+        Args:
+            last_x : [B, D]          location of last observed event
+            last_t : [B]             time of last observed event
+            tau    : [B]             sampled inter-event time
+            mark   : [B] (long)      sampled mark for next event
+            aux    : [B, aux_dim] or None
+            base   : [B, D] or None  base noise for flow
+        Returns:
+            x_hat  : [B, D]          sampled next location
+        """
+        B = last_x.size(0)
+        device = last_x.device
+        if base is None:
+            base = torch.randn(B, self.dim, device=device)
+
+        # Build cond to match cond_dim = 1 + dim + aux_dim + (mark_embed_dim?)
+        t_next = (last_t + tau).unsqueeze(-1)               # [B, 1]
+        pieces = [t_next, last_x]                           # [B, 1 + D]
+        if self.aux_dim > 0:
+            if aux is None:
+                aux = torch.zeros(B, self.aux_dim, device=device)
+            pieces.append(aux)                              # [B, 1 + D + aux_dim]
+
+        cond_full = torch.cat(pieces, dim=1)                # [B, cond_dim]
+
+        # CNF forward: base → data
+        x_hat, _ = self.inst_flow(base, logpx=None, cond=cond_full, reverse=True)
+
+        return x_hat
+    # ---- in neural_stpp/models/spatial/jumpcnf.py ----
+
+    def sample_ode(self, last_x, last_t, tau, mark=None, aux=None):
+        """
+        ODE-only spatial sampling (SMASH-consistent):
+          start from last observed state x_{T} at time t_last,
+          integrate the CNF ODE forward to t_next = t_last + tau.
+        No instantaneous flow is applied during sampling.
+
+        Args:
+            last_x: [B, D]       – last location from history
+            last_t: [B]          – last event time from history
+            tau:    [B]          – sampled inter-event time
+            mark:   [B] or None  – unused here (instantaneous flow disabled)
+            aux:    [B, D_a] or None – last auxiliary state (e.g., temporal hidden at T−)
+
+        Returns:
+            x_next: [B, D] at t_next
+        """
+        B, D = last_x.shape
+        device = last_x.device
+        dtype  = last_x.dtype
+
+        # effective times with same convention as training
+        t0 = (self.time_offset + last_t).to(device=device, dtype=dtype)           # [B]
+        t1 = (self.time_offset + last_t + tau).to(device=device, dtype=dtype)     # [B]
+
+        # prepare state for ODE: concatenate aux the same way training does (if present)
+        xs = last_x.to(device=device, dtype=dtype)                                 # [B, D]
+        if aux is not None:
+            aux = aux.to(device=device, dtype=dtype)
+            xs_cat = torch.cat([xs, aux], dim=1)                                   # [B, D + D_a]
+        else:
+            xs_cat = xs                                                           # [B, D]
+
+        # dummy log-density accumulator (not used for sampling)
+        dlogps = torch.zeros(B, device=device, dtype=dtype)
+
+        # integrate forward (no instantaneous flow here)
+        xs_cat_out, _ = self.cnf.integrate(t0, t1, xs_cat, dlogps,
+                                           method="dopri5", norm=None)
+        # slice back the spatial coords
+        x_next = xs_cat_out[:, :D]                                                # [B, D]
+        return x_next
+
+
+
+
 
 
 def gaussian_loglik(z, mean, log_std):
